@@ -196,6 +196,9 @@ pub const Handler = struct {
             .clipboard_contents,
             .title_push,
             .title_pop,
+            .claude_semantic_marker,
+            .tool_call_start,
+            .tool_call_end,
             => {},
         }
     }

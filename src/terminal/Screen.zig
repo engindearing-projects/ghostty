@@ -1479,9 +1479,9 @@ pub fn clearPrompt(self: *Screen) void {
                 break;
             },
 
-            // If we have command output, then we're most certainly not
+            // If we have command output or tool call, then we're most certainly not
             // at a prompt. Break out of the loop.
-            .command => break,
+            .command, .tool_call => break,
 
             // If we don't know, we keep searching.
             .unknown => {},
@@ -2701,7 +2701,7 @@ pub fn selectOutput(self: *Screen, pin: Pin) ?Selection {
             it_prev = p;
             const row = p.rowAndCell().row;
             switch (row.semantic_prompt) {
-                .command => break,
+                .command, .tool_call => break,
 
                 .unknown,
                 .prompt,
@@ -2717,7 +2717,7 @@ pub fn selectOutput(self: *Screen, pin: Pin) ?Selection {
         while (it.next()) |p| {
             const row = p.rowAndCell().row;
             switch (row.semantic_prompt) {
-                .command => {},
+                .command, .tool_call => {},
 
                 .unknown,
                 .prompt,
@@ -2748,7 +2748,7 @@ pub fn selectPrompt(self: *Screen, pin: Pin) ?Selection {
     // Ensure that the line the point is on is a prompt.
     const is_known = switch (pin.rowAndCell().row.semantic_prompt) {
         .prompt, .prompt_continuation, .input => true,
-        .command => return null,
+        .command, .tool_call => return null,
 
         // We allow unknown to continue because not all shells output any
         // semantic prompt information for continuation lines. This has the
@@ -2775,8 +2775,8 @@ pub fn selectPrompt(self: *Screen, pin: Pin) ?Selection {
                 // we treat it as a boundary.
                 .unknown => if (saw_semantic_prompt) break :start it_prev,
 
-                // Command output or unknown, definitely not a prompt.
-                .command => break :start it_prev,
+                // Command output, tool call, or unknown - definitely not a prompt.
+                .command, .tool_call => break :start it_prev,
             }
 
             it_prev = p;
@@ -2801,8 +2801,8 @@ pub fn selectPrompt(self: *Screen, pin: Pin) ?Selection {
                 // A prompt, we continue searching.
                 .prompt, .prompt_continuation, .input => {},
 
-                // Command output or unknown, definitely not a prompt.
-                .command, .unknown => break :end it_prev,
+                // Command output, tool call, or unknown - definitely not a prompt.
+                .command, .tool_call, .unknown => break :end it_prev,
             }
 
             it_prev = p;

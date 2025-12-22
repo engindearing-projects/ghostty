@@ -352,6 +352,11 @@ pub const StreamHandler = struct {
             .apc_end => try self.apcEnd(),
             .apc_put => self.apc.feed(self.alloc, value),
 
+            // Claude Code semantic markers - logged but not processed yet
+            .claude_semantic_marker => {},
+            .tool_call_start => {},
+            .tool_call_end => {},
+
             // Unimplemented
             .title_push,
             .title_pop,

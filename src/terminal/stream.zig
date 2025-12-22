@@ -131,6 +131,8 @@ pub const Action = union(Key) {
     kitty_color_report: kitty.color.OSC,
     color_operation: ColorOperation,
     claude_semantic_marker: ClaudeSemanticMarker,
+    tool_call_start: ToolCallStart,
+    tool_call_end: ToolCallEnd,
 
     pub const Key = lib.Enum(
         lib_target,
@@ -233,6 +235,8 @@ pub const Action = union(Key) {
             "kitty_color_report",
             "color_operation",
             "claude_semantic_marker",
+            "tool_call_start",
+            "tool_call_end",
         },
     );
 
@@ -464,6 +468,40 @@ pub const Action = union(Key) {
             return .{
                 .marker_type = @intFromEnum(self.marker_type),
                 .metadata = .init(self.metadata orelse ""),
+            };
+        }
+    };
+
+    pub const ToolCallStart = struct {
+        id: ?[:0]const u8,
+        name: ?[:0]const u8,
+
+        pub const C = extern struct {
+            id: lib.String,
+            name: lib.String,
+        };
+
+        pub fn cval(self: ToolCallStart) ToolCallStart.C {
+            return .{
+                .id = .init(self.id orelse ""),
+                .name = .init(self.name orelse ""),
+            };
+        }
+    };
+
+    pub const ToolCallEnd = struct {
+        id: ?[:0]const u8,
+        exit_code: ?u8,
+
+        pub const C = extern struct {
+            id: lib.String,
+            exit_code: u8,
+        };
+
+        pub fn cval(self: ToolCallEnd) ToolCallEnd.C {
+            return .{
+                .id = .init(self.id orelse ""),
+                .exit_code = self.exit_code orelse 0,
             };
         }
     };
@@ -2134,6 +2172,20 @@ pub fn Stream(comptime Handler: type) type {
                     try self.handler.vt(.claude_semantic_marker, .{
                         .marker_type = v.marker_type,
                         .metadata = v.metadata,
+                    });
+                },
+
+                .tool_call_start => |v| {
+                    try self.handler.vt(.tool_call_start, .{
+                        .id = v.id,
+                        .name = v.name,
+                    });
+                },
+
+                .tool_call_end => |v| {
+                    try self.handler.vt(.tool_call_end, .{
+                        .id = v.id,
+                        .exit_code = v.exit_code,
                     });
                 },
 

@@ -2194,7 +2194,7 @@ fn scrollPrompt(self: *PageList, delta: isize) void {
     while (it.next()) |next| {
         const row = next.rowAndCell().row;
         switch (row.semantic_prompt) {
-            .command, .unknown => {},
+            .command, .unknown, .tool_call => {},
             .prompt, .prompt_continuation, .input => {
                 delta_rem -= 1;
                 prompt_pin = next;

@@ -256,6 +256,8 @@ pub const Command = union(Key) {
             "prompt_end",
             "end_of_input",
             "end_of_command",
+            "tool_call_start",
+            "tool_call_end",
             "clipboard_contents",
             "report_pwd",
             "mouse_shape",

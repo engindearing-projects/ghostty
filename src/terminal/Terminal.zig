@@ -1096,9 +1096,9 @@ pub fn cursorIsAtPrompt(self: *Terminal) bool {
             .input,
             => return true,
 
-            // If we have command output, then we're most certainly not
+            // If we have command output or tool call, then we're most certainly not
             // at a prompt.
-            .command => return false,
+            .command, .tool_call => return false,
 
             // If we don't know, we keep searching.
             .unknown => {},
@@ -2262,9 +2262,9 @@ pub fn eraseDisplay(
                         .input,
                         => break,
 
-                        // If we have command output, then we're most certainly not
+                        // If we have command output or tool call, then we're most certainly not
                         // at a prompt.
-                        .command => break :at_prompt,
+                        .command, .tool_call => break :at_prompt,
 
                         // If we don't know, we keep searching.
                         .unknown => {},
