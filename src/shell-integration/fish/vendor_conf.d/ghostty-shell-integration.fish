@@ -178,6 +178,32 @@ function __ghostty_setup --on-event fish_prompt -d "Setup ghostty integration"
         end
     end
 
+    # Tool call markers for Claude Code integration
+    # These functions emit OSC 133;T and OSC 133;E escape sequences
+    # to mark tool call regions in terminal output.
+    function ghostty_tool_call_start -a id name -d "Mark the start of a tool call"
+        set -l opts ""
+        if test -n "$id"
+            set opts "$opts;id=$id"
+        end
+        if test -n "$name"
+            set opts "$opts;name=$name"
+        end
+        printf '\e]133;T%s\a' "$opts"
+    end
+
+    function ghostty_tool_call_end -a id exit_code -d "Mark the end of a tool call"
+        if test -z "$exit_code"
+            set exit_code $status
+        end
+        set -l opts ""
+        if test -n "$id"
+            set opts "$opts;id=$id"
+        end
+        set opts "$opts;exit=$exit_code"
+        printf '\e]133;E%s\a' "$opts"
+    end
+
     # Setup prompt marking
     function __ghostty_mark_prompt_start --on-event fish_prompt --on-event fish_cancel --on-event fish_posterror
         # If we never got the output end event, then we need to send it now.

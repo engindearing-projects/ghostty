@@ -130,6 +130,7 @@ pub const Action = union(Key) {
     set_attribute: sgr.Attribute,
     kitty_color_report: kitty.color.OSC,
     color_operation: ColorOperation,
+    claude_semantic_marker: ClaudeSemanticMarker,
 
     pub const Key = lib.Enum(
         lib_target,
@@ -231,6 +232,7 @@ pub const Action = union(Key) {
             "set_attribute",
             "kitty_color_report",
             "color_operation",
+            "claude_semantic_marker",
         },
     );
 
@@ -446,6 +448,23 @@ pub const Action = union(Key) {
 
         pub fn cval(_: ColorOperation) ColorOperation.C {
             return {};
+        }
+    };
+
+    pub const ClaudeSemanticMarker = struct {
+        marker_type: osc.Command.ClaudeSemanticMarker.MarkerType,
+        metadata: ?[]const u8,
+
+        pub const C = extern struct {
+            marker_type: u8,
+            metadata: lib.String,
+        };
+
+        pub fn cval(self: ClaudeSemanticMarker) ClaudeSemanticMarker.C {
+            return .{
+                .marker_type = @intFromEnum(self.marker_type),
+                .metadata = .init(self.metadata orelse ""),
+            };
         }
     };
 };
@@ -2109,6 +2128,13 @@ pub fn Stream(comptime Handler: type) type {
                 .conemu_guimacro,
                 => {
                     log.warn("unimplemented OSC callback: {}", .{cmd});
+                },
+
+                .claude_semantic_marker => |v| {
+                    try self.handler.vt(.claude_semantic_marker, .{
+                        .marker_type = v.marker_type,
+                        .metadata = v.metadata,
+                    });
                 },
 
                 .invalid => {

@@ -1772,7 +1772,28 @@ pub const Row = packed struct(u64) {
     /// screen.
     dirty: bool = false,
 
-    _padding: u22 = 0,
+    /// Claude Code semantic marker for this row.
+    /// Indicates what type of semantic region this row belongs to.
+    claude_marker: ClaudeMarkerType = .none,
+
+    _padding: u19 = 0,
+
+    /// Claude Code semantic marker type.
+    /// Uses 3 bits (u3) to store the marker type.
+    pub const ClaudeMarkerType = enum(u3) {
+        /// No marker set
+        none = 0,
+        /// Code block region
+        code_block = 1,
+        /// Diff section
+        diff_section = 2,
+        /// Tool call region
+        tool_call = 3,
+        /// Approval needed region
+        approval_needed = 4,
+        /// Output block region
+        output_block = 5,
+    };
 
     /// Semantic prompt type.
     pub const SemanticPrompt = enum(u3) {
@@ -1791,9 +1812,19 @@ pub const Row = packed struct(u64) {
         /// This line is the start of command output.
         command = 4,
 
+        /// This line is the start of a tool call (e.g., from Claude Code).
+        /// Tool calls are marked with OSC 133;T and represent discrete
+        /// operations that can be navigated and selected.
+        tool_call = 5,
+
         /// True if this is a prompt or input line.
         pub fn promptOrInput(self: SemanticPrompt) bool {
             return self == .prompt or self == .prompt_continuation or self == .input;
+        }
+
+        /// True if this is a tool call line.
+        pub fn isToolCall(self: SemanticPrompt) bool {
+            return self == .tool_call;
         }
     };
 

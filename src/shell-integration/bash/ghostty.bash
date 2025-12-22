@@ -249,5 +249,26 @@ function __ghostty_preexec() {
     _ghostty_executing=1
 }
 
+# Tool call markers for Claude Code integration
+# These functions emit OSC 133;T and OSC 133;E escape sequences
+# to mark tool call regions in terminal output.
+function ghostty_tool_call_start() {
+    local id="${1:-}"
+    local name="${2:-}"
+    local opts=""
+    [[ -n "$id" ]] && opts="${opts};id=$id"
+    [[ -n "$name" ]] && opts="${opts};name=$name"
+    builtin printf "\e]133;T%s\a" "$opts"
+}
+
+function ghostty_tool_call_end() {
+    local id="${1:-}"
+    local exit_code="${2:-$?}"
+    local opts=""
+    [[ -n "$id" ]] && opts="${opts};id=$id"
+    opts="${opts};exit=$exit_code"
+    builtin printf "\e]133;E%s\a" "$opts"
+}
+
 preexec_functions+=(__ghostty_preexec)
 precmd_functions+=(__ghostty_precmd)

@@ -257,6 +257,29 @@ _ghostty_deferred_init() {
       }
     fi
 
+    # Tool call markers for Claude Code integration
+    # These functions emit OSC 133;T and OSC 133;E escape sequences
+    # to mark tool call regions in terminal output.
+    ghostty_tool_call_start() {
+        builtin emulate -L zsh
+        local id="${1:-}"
+        local name="${2:-}"
+        local opts=""
+        [[ -n "$id" ]] && opts="${opts};id=$id"
+        [[ -n "$name" ]] && opts="${opts};name=$name"
+        builtin print -nu $_ghostty_fd '\e]133;T'"$opts"'\a'
+    }
+
+    ghostty_tool_call_end() {
+        builtin emulate -L zsh
+        local id="${1:-}"
+        local exit_code="${2:-$?}"
+        local opts=""
+        [[ -n "$id" ]] && opts="${opts};id=$id"
+        opts="${opts};exit=$exit_code"
+        builtin print -nu $_ghostty_fd '\e]133;E'"$opts"'\a'
+    }
+
     # SSH Integration
     if [[ "$GHOSTTY_SHELL_FEATURES" == *ssh-* ]]; then
       ssh() {

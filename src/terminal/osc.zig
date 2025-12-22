@@ -110,6 +110,24 @@ pub const Command = union(Key) {
         // TODO: err option
     },
 
+    /// Tool call start marker (OSC 133;T). Used by Claude Code to mark
+    /// the beginning of a tool call. This enables navigation between
+    /// tool calls and selecting/copying tool call content.
+    tool_call_start: struct {
+        /// Tool call ID for correlation with end marker
+        id: ?[:0]const u8 = null,
+        /// Name of the tool being called
+        name: ?[:0]const u8 = null,
+    },
+
+    /// Tool call end marker (OSC 133;E). Marks the end of a tool call.
+    tool_call_end: struct {
+        /// Tool call ID to match with start marker
+        id: ?[:0]const u8 = null,
+        /// Exit code of the tool call (0 = success)
+        exit_code: ?u8 = null,
+    },
+
     /// Set or get clipboard contents. If data is null, then the current
     /// clipboard contents are sent to the pty. If data is set, this
     /// contents is set on the clipboard.
@@ -193,6 +211,40 @@ pub const Command = union(Key) {
     /// ConEmu GUI macro (OSC 9;6)
     conemu_guimacro: [:0]const u8,
 
+    /// Claude Code semantic marker (OSC 9001)
+    /// Used by Claude Code CLI to mark semantic regions in terminal output.
+    /// Format: OSC 9001 ; <marker_type> [; <metadata>] ST
+    claude_semantic_marker: ClaudeSemanticMarker,
+
+    pub const ClaudeSemanticMarker = struct {
+        marker_type: MarkerType,
+        metadata: ?[:0]const u8 = null,
+
+        pub const MarkerType = enum {
+            /// Marks a code block region
+            code_block,
+            /// Marks a diff section
+            diff_section,
+            /// Marks a tool call region
+            tool_call,
+            /// Marks a region requiring user approval
+            approval_needed,
+            /// Marks an output block region
+            output_block,
+
+            pub fn fromString(s: []const u8) ?MarkerType {
+                const map = std.StaticStringMap(MarkerType).initComptime(.{
+                    .{ "code_block", .code_block },
+                    .{ "diff_section", .diff_section },
+                    .{ "tool_call", .tool_call },
+                    .{ "approval_needed", .approval_needed },
+                    .{ "output_block", .output_block },
+                });
+                return map.get(s);
+            }
+        };
+    };
+
     pub const Key = LibEnum(
         if (build_options.c_abi) .c else .zig,
         // NOTE: Order matters, see LibEnum documentation.
@@ -218,6 +270,7 @@ pub const Command = union(Key) {
             "conemu_progress_report",
             "conemu_wait_input",
             "conemu_guimacro",
+            "claude_semantic_marker",
         },
     );
 
@@ -451,6 +504,11 @@ pub const Parser = struct {
         conemu_progress_prevalue,
         conemu_progress_value,
         conemu_guimacro,
+
+        // Claude Code semantic marker states (OSC 9001)
+        @"9001",
+        claude_marker_type,
+        claude_marker_metadata,
     };
 
     pub fn init(alloc: ?Allocator) Parser {
@@ -1082,6 +1140,13 @@ pub const Parser = struct {
             },
 
             .osc_9 => switch (c) {
+                '0' => {
+                    self.state = .@"9001";
+                    // This will end up being either a Claude marker OSC 9001,
+                    // or a desktop notification OSC 9 that begins with '0', so
+                    // mark as complete.
+                    self.complete = true;
+                },
                 '1' => {
                     self.state = .conemu_sleep;
                     // This will end up being either a ConEmu sleep OSC 9;1,
@@ -1295,6 +1360,50 @@ pub const Parser = struct {
                 else => self.showDesktopNotification(),
             },
 
+            // Claude Code semantic marker states (OSC 9001)
+            .@"9001" => switch (c) {
+                '0' => {
+                    // Stay in same state, accumulating "900" -> "9001"
+                },
+                '1' => {
+                    // Now we have "9001", wait for semicolon
+                },
+                ';' => {
+                    // Check if we have accumulated "9001"
+                    // buf contains: "9;00" or "9;001" at this point
+                    // buf_start points after "9;", so we check from buf_start
+                    const prefix = self.buf[self.buf_start .. self.buf_idx - 1];
+                    if (std.mem.eql(u8, prefix, "001")) {
+                        self.command = .{ .claude_semantic_marker = .{ .marker_type = undefined } };
+                        self.state = .claude_marker_type;
+                        self.buf_start = self.buf_idx;
+                        self.complete = false;
+                    } else {
+                        // Not "9001", treat as desktop notification
+                        self.showDesktopNotification();
+                    }
+                },
+                else => self.showDesktopNotification(),
+            },
+
+            .claude_marker_type => switch (c) {
+                ';' => {
+                    // Parse the marker type
+                    const type_str = self.buf[self.buf_start .. self.buf_idx - 1];
+                    if (Command.ClaudeSemanticMarker.MarkerType.fromString(type_str)) |mt| {
+                        self.command.claude_semantic_marker.marker_type = mt;
+                        self.state = .claude_marker_metadata;
+                        self.buf_start = self.buf_idx;
+                        self.complete = true;
+                    } else {
+                        self.state = .invalid;
+                    }
+                },
+                else => {},
+            },
+
+            .claude_marker_metadata => self.complete = true,
+
             .semantic_prompt => switch (c) {
                 'A' => {
                     self.state = .semantic_option_start;
@@ -1317,6 +1426,20 @@ pub const Parser = struct {
                 'D' => {
                     self.state = .semantic_exit_code_start;
                     self.command = .{ .end_of_command = .{} };
+                    self.complete = true;
+                },
+
+                'T' => {
+                    // Tool call start marker (OSC 133;T)
+                    self.state = .semantic_option_start;
+                    self.command = .{ .tool_call_start = .{} };
+                    self.complete = true;
+                },
+
+                'E' => {
+                    // Tool call end marker (OSC 133;E)
+                    self.state = .semantic_exit_code_start;
+                    self.command = .{ .tool_call_end = .{} };
                     self.complete = true;
                 },
 
@@ -1569,12 +1692,34 @@ pub const Parser = struct {
                 },
                 else => {},
             }
+        } else if (mem.eql(u8, self.temp_state.key, "id")) {
+            // Tool call ID for correlation between start and end markers
+            switch (self.command) {
+                .tool_call_start => |*v| v.id = value,
+                .tool_call_end => |*v| v.id = value,
+                else => {},
+            }
+        } else if (mem.eql(u8, self.temp_state.key, "name")) {
+            // Tool name for tool_call_start
+            switch (self.command) {
+                .tool_call_start => |*v| v.name = value,
+                else => {},
+            }
+        } else if (mem.eql(u8, self.temp_state.key, "exit")) {
+            // Exit code for tool_call_end
+            switch (self.command) {
+                .tool_call_end => |*v| {
+                    v.exit_code = std.fmt.parseInt(u8, value, 10) catch null;
+                },
+                else => {},
+            }
         } else log.info("unknown semantic prompts option: {s}", .{self.temp_state.key});
     }
 
     fn endSemanticExitCode(self: *Parser) void {
         switch (self.command) {
             .end_of_command => |*v| v.exit_code = @truncate(self.temp_state.num),
+            .tool_call_end => |*v| v.exit_code = @truncate(self.temp_state.num),
             else => {},
         }
     }
@@ -1754,6 +1899,23 @@ pub const Parser = struct {
             .conemu_progress_prevalue,
             .conemu_progress_value,
             => {},
+
+            // Claude marker type needs to be parsed at end
+            .claude_marker_type => {
+                const type_str = self.buf[self.buf_start..self.buf_idx];
+                if (Command.ClaudeSemanticMarker.MarkerType.fromString(type_str)) |mt| {
+                    self.command.claude_semantic_marker.marker_type = mt;
+                    self.complete = true;
+                } else {
+                    self.complete = false;
+                }
+            },
+
+            // Claude marker metadata just needs string termination
+            .claude_marker_metadata => {
+                self.buf[self.buf_idx] = 0;
+                self.command.claude_semantic_marker.metadata = self.buf[self.buf_start..self.buf_idx :0];
+            },
 
             else => {},
         }
@@ -3336,4 +3498,127 @@ test "OSC: OSC 777 show desktop notification with title" {
     try testing.expect(cmd == .show_desktop_notification);
     try testing.expectEqualStrings(cmd.show_desktop_notification.title, "Title");
     try testing.expectEqualStrings(cmd.show_desktop_notification.body, "Body");
+}
+
+
+test "OSC 9001: claude semantic marker code_block" {
+    const testing = std.testing;
+
+    var p: Parser = .init(null);
+
+    const input = "9;001;code_block";
+    for (input) |ch| p.next(ch);
+
+    const cmd = p.end(null).?.*;
+    try testing.expect(cmd == .claude_semantic_marker);
+    try testing.expect(cmd.claude_semantic_marker.marker_type == .code_block);
+    try testing.expect(cmd.claude_semantic_marker.metadata == null);
+}
+
+test "OSC 9001: claude semantic marker diff_section" {
+    const testing = std.testing;
+
+    var p: Parser = .init(null);
+
+    const input = "9;001;diff_section";
+    for (input) |ch| p.next(ch);
+
+    const cmd = p.end(null).?.*;
+    try testing.expect(cmd == .claude_semantic_marker);
+    try testing.expect(cmd.claude_semantic_marker.marker_type == .diff_section);
+    try testing.expect(cmd.claude_semantic_marker.metadata == null);
+}
+
+test "OSC 9001: claude semantic marker tool_call" {
+    const testing = std.testing;
+
+    var p: Parser = .init(null);
+
+    const input = "9;001;tool_call";
+    for (input) |ch| p.next(ch);
+
+    const cmd = p.end(null).?.*;
+    try testing.expect(cmd == .claude_semantic_marker);
+    try testing.expect(cmd.claude_semantic_marker.marker_type == .tool_call);
+    try testing.expect(cmd.claude_semantic_marker.metadata == null);
+}
+
+test "OSC 9001: claude semantic marker approval_needed" {
+    const testing = std.testing;
+
+    var p: Parser = .init(null);
+
+    const input = "9;001;approval_needed";
+    for (input) |ch| p.next(ch);
+
+    const cmd = p.end(null).?.*;
+    try testing.expect(cmd == .claude_semantic_marker);
+    try testing.expect(cmd.claude_semantic_marker.marker_type == .approval_needed);
+    try testing.expect(cmd.claude_semantic_marker.metadata == null);
+}
+
+test "OSC 9001: claude semantic marker output_block" {
+    const testing = std.testing;
+
+    var p: Parser = .init(null);
+
+    const input = "9;001;output_block";
+    for (input) |ch| p.next(ch);
+
+    const cmd = p.end(null).?.*;
+    try testing.expect(cmd == .claude_semantic_marker);
+    try testing.expect(cmd.claude_semantic_marker.marker_type == .output_block);
+    try testing.expect(cmd.claude_semantic_marker.metadata == null);
+}
+
+test "OSC 9001: claude semantic marker with metadata" {
+    const testing = std.testing;
+
+    var p: Parser = .init(null);
+
+    const input = "9;001;code_block;language=python";
+    for (input) |ch| p.next(ch);
+
+    const cmd = p.end(null).?.*;
+    try testing.expect(cmd == .claude_semantic_marker);
+    try testing.expect(cmd.claude_semantic_marker.marker_type == .code_block);
+    try testing.expectEqualStrings("language=python", cmd.claude_semantic_marker.metadata.?);
+}
+
+test "OSC 9001: invalid marker type" {
+    const testing = std.testing;
+
+    var p: Parser = .init(null);
+
+    const input = "9;001;invalid_type";
+    for (input) |ch| p.next(ch);
+
+    const cmd = p.end(null);
+    try testing.expect(cmd == null);
+}
+
+test "OSC 9001: 900 is desktop notification" {
+    const testing = std.testing;
+
+    var p: Parser = .init(null);
+
+    // "9;00;" would be incomplete 9001, should fall back to desktop notification
+    const input = "9;00;Hello";
+    for (input) |ch| p.next(ch);
+
+    const cmd = p.end(null).?.*;
+    try testing.expect(cmd == .show_desktop_notification);
+    try testing.expectEqualStrings("", cmd.show_desktop_notification.title);
+}
+
+test "OSC 9001: 90 is desktop notification" {
+    const testing = std.testing;
+
+    var p: Parser = .init(null);
+
+    const input = "9;0";
+    for (input) |ch| p.next(ch);
+
+    const cmd = p.end(null).?.*;
+    try testing.expect(cmd == .show_desktop_notification);
 }
